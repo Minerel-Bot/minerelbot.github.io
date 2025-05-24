@@ -200,60 +200,96 @@ client.on(Events.InteractionCreate, async interaction => {
           .addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ign').setLabel('Your IGN').setStyle(TextInputStyle.Short).setRequired(true)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('staff').setLabel('Staff who punished you').setStyle(TextInputStyle.Short)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('type').setLabel('Mute or Ban?').setStyle(TextInputStyle.Short)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('reason').setLabel('Why accept appeal?').setStyle(TextInputStyle.Paragraph))
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('type').setLabel('Punishment type').setStyle(TextInputStyle.Short)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('reason').setLabel('Appeal reason').setStyle(TextInputStyle.Paragraph))
           )
       };
-      return interaction.showModal(modals[interaction.values[0]]);
+
+      const modal = modals[interaction.values[0]];
+      if (!modal) return interaction.reply({ content: 'Invalid selection.', ephemeral: true });
+      return interaction.showModal(modal);
     }
 
-    // Modal Submission → Create Ticket Channel
+    // Modal Submission → Create Ticket Channel (Updated)
     if (interaction.isModalSubmit()) {
       await interaction.deferReply({ ephemeral: true });
       const info = ticketMap[interaction.customId];
-      if (!info) return;
+      if (!info) return interaction.editReply({ content: '❌ Invalid ticket type.' });
 
       const user = interaction.user;
+
+      // Get category channel
+      const category = interaction.guild.channels.cache.get(info.cat);
+      if (!category) return interaction.editReply({ content: '❌ Ticket category not found.' });
+
+      // Clone category permission overwrites
+      const permissionOverwrites = category.permissionOverwrites.cache.map(perm => ({
+        id: perm.id,
+        type: perm.type,
+        allow: perm.allow.toArray(),
+        deny: perm.deny.toArray(),
+      }));
+
+      // Add user permission
+      permissionOverwrites.push({
+        id: user.id,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory
+        ]
+      });
+
+      // Create the ticket channel with inherited permissions + user perms
       const chan = await interaction.guild.channels.create({
         name: `${info.name}-${user.username.toLowerCase()}`,
         type: ChannelType.GuildText,
         parent: info.cat,
-        permissionOverwrites: [
-          { id: interaction.guild.roles.everyone, deny: [PermissionsBitField.Flags.ViewChannel] },
-          { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
-        ]
+        permissionOverwrites: permissionOverwrites,
       });
 
-      const thank = new EmbedBuilder().setColor(0x00AE86).setTitle('Ticket Created').setDescription(info.thanks);
-      const form = new EmbedBuilder().setColor(0x2F3136).setTitle('Your Submitted Information');
-      info.fields.forEach(([q, id]) => form.addFields({ name: q, value: `\`${interaction.fields.getTextInputValue(id) || 'N/A'}\`` }));
+      // Send thank you embed + form summary + close button
+      const thank = new EmbedBuilder()
+        .setColor(0x00AE86)
+        .setTitle('Ticket Created')
+        .setDescription(info.thanks);
+
+      const form = new EmbedBuilder()
+        .setColor(0x2F3136)
+        .setTitle('Your Submitted Information');
+
+      info.fields.forEach(([q, id]) => {
+        form.addFields({ name: q, value: `\`${interaction.fields.getTextInputValue(id) || 'N/A'}\`` });
+      });
 
       const btn = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('close_ticket').setLabel('Close Ticket').setStyle(ButtonStyle.Danger)
+        new ButtonBuilder()
+          .setCustomId('close_ticket')
+          .setLabel('Close Ticket')
+          .setStyle(ButtonStyle.Danger)
       );
 
       await chan.send({ content: `<@${user.id}>`, embeds: [thank, form], components: [btn] });
       return interaction.editReply({ content: `✅ Ticket created: ${chan}` });
     }
 
-    // Close Ticket
+    // Button to close ticket
     if (interaction.isButton() && interaction.customId === 'close_ticket') {
-      await interaction.deferReply({ ephemeral: true });
-      if (!interaction.member.roles.cache.has('1361555359944282162'))
-        return interaction.editReply({ content: '❌ No permission to close.' });
+      if (!interaction.channel.name.startsWith('gen-sup') &&
+          !interaction.channel.name.startsWith('staff-app') &&
+          !interaction.channel.name.startsWith('staff-repo') &&
+          !interaction.channel.name.startsWith('punis-app')) {
+        return interaction.reply({ content: 'This command can only be used in a ticket channel.', ephemeral: true });
+      }
 
-      await interaction.channel.send('🔒 Ticket closed.');
-      await interaction.channel.delete();
-      return interaction.editReply({ content: '✅ Ticket closed.' });
+      await interaction.channel.delete().catch(() => {
+        return interaction.reply({ content: 'Failed to delete channel.', ephemeral: true });
+      });
     }
-
-  } catch (err) {
-    console.error('❌ Error handling interaction:', err);
-    if (!interaction.replied) {
-      interaction.reply({ content: '❌ An error occurred.', ephemeral: true }).catch(() => {});
-    }
+  } catch (error) {
+    console.error('Interaction handling error:', error);
   }
 });
 
-// 🔐 LOGIN
+// 🔐 LOGIN BOT
 client.login(TOKEN);
